@@ -1,0 +1,123 @@
+#!/usr/bin/php
+<?php
+
+use Facebook\WebDriver\Remote\DesiredCapabilities;
+use Facebook\WebDriver\Remote\RemoteWebDriver;
+use Facebook\WebDriver\WebDriverBy;
+use Facebook\WebDriver\WebDriverExpectedCondition;
+use Facebook\WebDriver\WebDriverKeys;
+
+require_once(__DIR__ . '/vendor/autoload.php');
+
+class PresearchBot
+{
+    /** @var  RemoteWebDriver */
+    private $driver;
+
+    /** @var  array */
+    private $credentials;
+
+    /** @var  array */
+    private $phrases;
+
+    /** @var int */
+    private $limit = 32;
+
+    /** @var array */
+    private $delay = [300, 600];
+
+    /** @var array */
+    private $usedPhrases = [];
+
+    public function __construct(RemoteWebDriver $driver, array $credentials)
+    {
+        $this->driver = $driver;
+        $this->credentials = $credentials;
+    }
+
+    public function run()
+    {
+//        $this->driver->manage()->window()->maximize();
+        $this->driver->get('https://presearch.org/');
+
+        $this->login();
+        sleep(4);
+
+        $duration = 0;
+        $phrasesCount = 0;
+
+        while($phrasesCount < $this->limit && count($this->phrases) > 0) {
+            $this->driver->get('https://presearch.org');
+            sleep(2);
+
+            $searchElement = $this->driver->findElement(WebDriverBy::id('search'));
+            $searchElement->sendKeys($this->getRandomPhrase());
+            $this->driver->getKeyboard()->pressKey(WebDriverKeys::ENTER);
+
+            sleep(rand($this->delay[0], $this->delay[1]));
+
+            $phrasesCount++;
+        }
+    }
+
+    public function login()
+    {
+        $this->driver->get('https://presearch.org/login');
+        $this->driver->wait()->until(
+                WebDriverExpectedCondition::visibilityOf(
+                        $this->driver->findElement(WebDriverBy::cssSelector('.login-box'))
+                )
+        );
+
+        $this->driver->findElement(WebDriverBy::id('email'))->sendKeys($this->credentials['email']);
+        $this->driver->findElement(WebDriverBy::id('password'))->sendKeys($this->credentials['password']);
+        $this->driver->findElement(WebDriverBy::cssSelector('.login-box button[type="submit"]'))->click();
+    }
+
+    /**
+     * @return array
+     */
+    public function getPhrases(): array
+    {
+        return $this->phrases;
+    }
+
+    /**
+     * @param array $phrases
+     */
+    public function setPhrases(array $phrases)
+    {
+        $this->phrases = $phrases;
+    }
+
+    private function getRandomPhrase()
+    {
+        $random = array_rand($this->phrases);
+        $phrase = $this->phrases[$random];
+
+        unset($this->phrases[$random]);
+
+        return $phrase;
+    }
+}
+
+$credentials = [
+    'email' => $argv[1] ?? $argv[1],
+    'password' => $argv[2] ?? $argv[2],
+];
+
+$phrases = (function() {
+    $phrases = file(__DIR__ . '/phrases.txt');
+
+    foreach($phrases as $key => $phrase) {
+        if(strlen($phrase) <= 1 || $phrase[0] === '#' || substr($phrase, 0, 2) === '//')
+            unset($phrases[$key]);
+    }
+
+    return $phrases;
+});
+
+$driver = RemoteWebDriver::create('http://localhost:9515/wd/hub', DesiredCapabilities::chrome());
+$bot = new PresearchBot($driver, $credentials);
+$bot->setPhrases($phrases());
+$bot->run();
