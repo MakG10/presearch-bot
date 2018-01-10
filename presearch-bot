@@ -1,15 +1,22 @@
 #!/usr/bin/php
 <?php
 
+use Facebook\WebDriver\Exception\NoSuchElementException;
 use Facebook\WebDriver\Remote\DesiredCapabilities;
 use Facebook\WebDriver\Remote\RemoteWebDriver;
 use Facebook\WebDriver\WebDriverBy;
 use Facebook\WebDriver\WebDriverExpectedCondition;
 use Facebook\WebDriver\WebDriverKeys;
+use Symfony\Component\Console\Application;
+use Symfony\Component\Console\Command\Command;
+use Symfony\Component\Console\Input\InputArgument;
+use Symfony\Component\Console\Input\InputInterface;
+use Symfony\Component\Console\Input\InputOption;
+use Symfony\Component\Console\Output\OutputInterface;
 
 require_once(__DIR__ . '/vendor/autoload.php');
 
-class PresearchBot
+class PresearchBot extends Command
 {
     /** @var  RemoteWebDriver */
     private $driver;
@@ -21,7 +28,7 @@ class PresearchBot
     private $phrases;
 
     /** @var int */
-    private $limit = 32;
+    private $limit = [32, 40];
 
     /** @var array */
     private $delay = [300, 600];
@@ -29,14 +36,63 @@ class PresearchBot
     /** @var array */
     private $usedPhrases = [];
 
-    public function __construct(RemoteWebDriver $driver, array $credentials)
+    public function __construct()
     {
-        $this->driver = $driver;
-        $this->credentials = $credentials;
+        parent::__construct();
+
+        $phrases = (function() {
+            $phrases = file(__DIR__ . '/phrases.txt');
+
+            foreach($phrases as $key => $phrase) {
+                if(strlen($phrase) <= 1 || $phrase[0] === '#' || substr($phrase, 0, 2) === '//')
+                    unset($phrases[$key]);
+            }
+
+            return $phrases;
+        });
+
+        $this->phrases = $phrases();
     }
 
-    public function run()
+    public function configure()
     {
+        $this
+            ->setName('run')
+            ->addArgument('email', InputArgument::REQUIRED, 'E-mail to sign in with')
+            ->addArgument('password', InputArgument::REQUIRED, 'Password to sign in with')
+            ->addOption('limit', 'num', InputOption::VALUE_OPTIONAL, 'How many searches to perform. Can be a specific number or a range, i.e. 32, 10-15. Default: 32-40')
+            ->addOption('delay', 'd', InputOption::VALUE_OPTIONAL, 'Delay in seconds between searches. Could be a specific number or a range, i.e. 300, 250-400. Default: 300-600')
+        ;
+    }
+
+    public function execute(InputInterface $input, OutputInterface $output)
+    {
+        if($input->getOption('limit')) {
+            $this->limit = explode('-', $input->getOption('limit'));
+            if(count($this->limit) === 1) array_push($this->limit, $this->limit[0]);
+
+            if(!ctype_digit($this->limit[0]) && !ctype_digit($this->limit[1])) {
+                $output->writeln('Incorrect option: limit');
+                return 1;
+            }
+        }
+
+        if($input->getOption('delay')) {
+            $this->delay = explode('-', $input->getOption('delay'));
+            if(count($this->delay) === 1) array_push($this->delay, $this->delay[0]);
+
+            if(!ctype_digit($this->delay[0]) || !ctype_digit($this->delay[1])) {
+                $output->writeln('Incorrect option: limit');
+                return 1;
+            }
+        }
+
+        $this->driver = RemoteWebDriver::create('http://localhost:9515/wd/hub', DesiredCapabilities::chrome());
+        $this->credentials = [
+            'email' => $input->getArgument('email'),
+            'password' => $input->getArgument('password'),
+        ];
+
 //        $this->driver->manage()->window()->maximize();
         $this->driver->get('https://presearch.org/');
 
@@ -45,8 +101,16 @@ class PresearchBot
 
         $duration = 0;
         $phrasesCount = 0;
+        $limit = rand($this->limit[0], $this->limit[1]);
 
-        while($phrasesCount < $this->limit && count($this->phrases) > 0) {
+        if($this->getBalance() === 'unknown') {
+            $output->writeln('Unable to sign in.');
+            return 2;
+        }
+
+        $output->writeln(sprintf('Successfuly logged in, planning to do %s loops... Current balance is %s', $limit, $this->getBalance()));
+
+        while($phrasesCount < $limit && count($this->phrases) > 0) {
             $this->driver->get('https://presearch.org');
             sleep(2);
 
@@ -58,6 +122,11 @@ class PresearchBot
 
             $phrasesCount++;
         }
+
+        $this->driver->get('https://presearch.org');
+        sleep(5);
+
+        $output->writeln(sprintf('Finishing up, current balance is %s', $this->getBalance()));
     }
 
     public function login()
@@ -72,6 +141,17 @@ class PresearchBot
         $this->driver->findElement(WebDriverBy::id('email'))->sendKeys($this->credentials['email']);
         $this->driver->findElement(WebDriverBy::id('password'))->sendKeys($this->credentials['password']);
         $this->driver->findElement(WebDriverBy::cssSelector('.login-box button[type="submit"]'))->click();
+    }
+
+    public function getBalance()
+    {
+        try {
+            $balance = $this->driver->findElement(WebDriverBy::cssSelector('.balance'))->getText();
+
+            return $balance . ' PRE';
+        } catch(NoSuchElementException $e) {
+            return 'unknown';
+        }
     }
 
     /**
@@ -101,23 +181,6 @@ class PresearchBot
     }
 }
 
-$credentials = [
-    'email' => $argv[1] ?? $argv[1],
-    'password' => $argv[2] ?? $argv[2],
-];
-
-$phrases = (function() {
-    $phrases = file(__DIR__ . '/phrases.txt');
-
-    foreach($phrases as $key => $phrase) {
-        if(strlen($phrase) <= 1 || $phrase[0] === '#' || substr($phrase, 0, 2) === '//')
-            unset($phrases[$key]);
-    }
-
-    return $phrases;
-});
-
-$driver = RemoteWebDriver::create('http://localhost:9515/wd/hub', DesiredCapabilities::chrome());
-$bot = new PresearchBot($driver, $credentials);
-$bot->setPhrases($phrases());
-$bot->run();
+$app = new Application('presearch-bot');
+$app->addCommands([new PresearchBot()]);
+$app->run();

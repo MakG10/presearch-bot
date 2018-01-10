@@ -3,7 +3,8 @@
     "description": "Presearch Bot",
     "type": "project",
     "require": {
-        "facebook/webdriver": "^1.5"
+        "facebook/webdriver": "^1.5",
+        "symfony/console": "^4.0"
     },
     "license": "MIT",
     "authors": [
