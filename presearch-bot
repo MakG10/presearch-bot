@@ -1,6 +1,7 @@
 #!/usr/bin/php
 <?php
 
+use Facebook\WebDriver\Chrome\ChromeOptions;
 use Facebook\WebDriver\Exception\NoSuchElementException;
 use Facebook\WebDriver\Remote\DesiredCapabilities;
 use Facebook\WebDriver\Remote\RemoteWebDriver;
@@ -25,7 +26,7 @@ class PresearchBot extends Command
     private $credentials;
 
     /** @var  array */
-    private $phrases;
+    private $phrases = ['makg.eu', 'jquery meme generator', 'bitcoin'];
 
     /** @var int */
     private $limit = [32, 40];
@@ -40,77 +41,95 @@ class PresearchBot extends Command
     {
         parent::__construct();
 
-        $phrases = (function() {
-            $phrases = file(__DIR__ . '/phrases.txt');
-
-            foreach($phrases as $key => $phrase) {
-                if(strlen($phrase) <= 1 || $phrase[0] === '#' || substr($phrase, 0, 2) === '//')
-                    unset($phrases[$key]);
+        set_error_handler(function($errno, $errstr, $errfile, $errline, array $errcontext) {
+            if (0 === error_reporting()) {
+                return false;
             }
 
-            return $phrases;
-        });
-
-        $this->phrases = $phrases();
+            throw new \Exception($errstr, 0);
+        }, E_WARNING);
     }
 
     public function configure()
     {
         $this
             ->setName('run')
+            ->setDescription("Presearch Bot (https://github.com/MakG10/presearch-bot)")
             ->addArgument('email', InputArgument::REQUIRED, 'E-mail to sign in with')
             ->addArgument('password', InputArgument::REQUIRED, 'Password to sign in with')
             ->addOption('limit', 'num', InputOption::VALUE_OPTIONAL, 'How many searches to perform. Can be a specific number or a range, i.e. 32, 10-15. Default: 32-40')
             ->addOption('delay', 'd', InputOption::VALUE_OPTIONAL, 'Delay in seconds between searches. Could be a specific number or a range, i.e. 300, 250-400. Default: 300-600')
+            ->addOption('webdriver-url', 'url', InputOption::VALUE_REQUIRED, 'WebDriver URL', 'http://localhost:9515/wd/hub')
+            ->addOption('headless', 'hl', InputOption::VALUE_NONE, 'Run Chrome in headless mode')
+            ->addOption('phrases', 'p', InputOption::VALUE_REQUIRED, 'File with phrases to choose from. Each phrase should be in a separate line')
+            ->addOption('force', 'f', InputOption::VALUE_NONE, 'Force start ignoring all warnings')
         ;
     }
 
     public function execute(InputInterface $input, OutputInterface $output)
     {
-        if($input->getOption('limit')) {
+        if ($input->getOption('limit')) {
             $this->limit = explode('-', $input->getOption('limit'));
-            if(count($this->limit) === 1) array_push($this->limit, $this->limit[0]);
+            if (count($this->limit) === 1) array_push($this->limit, $this->limit[0]);
 
-            if(!ctype_digit($this->limit[0]) && !ctype_digit($this->limit[1])) {
+            if (!ctype_digit($this->limit[0]) && !ctype_digit($this->limit[1])) {
                 $output->writeln('Incorrect option: limit');
                 return 1;
             }
         }
 
-        if($input->getOption('delay')) {
+        if ($input->getOption('delay')) {
             $this->delay = explode('-', $input->getOption('delay'));
-            if(count($this->delay) === 1) array_push($this->delay, $this->delay[0]);
+            if (count($this->delay) === 1) array_push($this->delay, $this->delay[0]);
 
-            if(!ctype_digit($this->delay[0]) || !ctype_digit($this->delay[1])) {
+            if (!ctype_digit($this->delay[0]) || !ctype_digit($this->delay[1])) {
                 $output->writeln('Incorrect option: limit');
                 return 1;
             }
         }
 
-        $this->driver = RemoteWebDriver::create('http://localhost:9515/wd/hub', DesiredCapabilities::chrome());
+
+        $phrasesFilename = $input->getOption('phrases') ?: __DIR__ . '/phrases.txt';
+        $phrases = $this->loadPhrases($phrasesFilename);
+
+        if (empty($phrases) && !$input->getOption('force')) {
+            $output->writeln(sprintf('Failed to load phrases from file "%s". If you want to run bot with only 3 predefined phrases, use --force option.', $phrasesFilename));
+
+            return 2;
+        }
+
+        if (!empty($phrases)) $this->setPhrases($phrases);
+
+
+        $driverOptions = new ChromeOptions();
+        if ($input->getOption('headless')) $driverOptions->addArguments(['--headless']);
+
+        $driverCapabilities = DesiredCapabilities::chrome();
+        $driverCapabilities->setCapability(ChromeOptions::CAPABILITY, $driverOptions);
+
+        $this->driver = RemoteWebDriver::create('', $driverCapabilities);
         $this->credentials = [
             'email' => $input->getArgument('email'),
             'password' => $input->getArgument('password'),
         ];
 
-//        $this->driver->manage()->window()->maximize();
         $this->driver->get('https://presearch.org/');
 
         $this->login();
-        sleep(4);
 
-        $duration = 0;
         $phrasesCount = 0;
         $limit = rand($this->limit[0], $this->limit[1]);
 
-        if($this->getBalance() === 'unknown') {
+        if ($this->getBalance() === 'unknown') {
             $output->writeln('Unable to sign in.');
             return 2;
         }
 
         $output->writeln(sprintf('Successfuly logged in, planning to do %s loops... Current balance is %s', $limit, $this->getBalance()));
 
-        while($phrasesCount < $limit && count($this->phrases) > 0) {
+        sleep(2);
+
+        while ($phrasesCount < $limit && count($this->phrases) > 0) {
             $this->driver->get('https://presearch.org');
             sleep(2);
 
@@ -124,18 +143,17 @@ class PresearchBot extends Command
         }
 
         $this->driver->get('https://presearch.org');
-        sleep(5);
 
         $output->writeln(sprintf('Finishing up, current balance is %s', $this->getBalance()));
     }
 
-    public function login()
+    private function login()
     {
         $this->driver->get('https://presearch.org/login');
         $this->driver->wait()->until(
-                WebDriverExpectedCondition::visibilityOf(
-                        $this->driver->findElement(WebDriverBy::cssSelector('.login-box'))
-                )
+            WebDriverExpectedCondition::visibilityOf(
+                $this->driver->findElement(WebDriverBy::cssSelector('.login-box'))
+            )
         );
 
         $this->driver->findElement(WebDriverBy::id('email'))->sendKeys($this->credentials['email']);
@@ -143,21 +161,46 @@ class PresearchBot extends Command
         $this->driver->findElement(WebDriverBy::cssSelector('.login-box button[type="submit"]'))->click();
     }
 
-    public function getBalance()
+    /**
+     * @return string
+     */
+    private function getBalance()
     {
         try {
+            $this->driver->wait(10)->until(
+                WebDriverExpectedCondition::presenceOfElementLocated(
+                    WebDriverBy::cssSelector('.balance')
+                )
+            );
+
             $balance = $this->driver->findElement(WebDriverBy::cssSelector('.balance'))->getText();
 
             return $balance . ' PRE';
-        } catch(NoSuchElementException $e) {
+        } catch (NoSuchElementException $e) {
             return 'unknown';
+        }
+    }
+
+    private function loadPhrases($filename)
+    {
+        try {
+            $phrases = file($filename);
+
+            foreach ($phrases as $key => $phrase) {
+                if (strlen($phrase) <= 1 || $phrase[0] === '#' || substr($phrase, 0, 2) === '//')
+                    unset($phrases[$key]);
+            }
+
+            return $phrases;
+        } catch (\Exception $e) {
+            return null;
         }
     }
 
     /**
      * @return array
      */
-    public function getPhrases(): array
+    private function getPhrases(): array
     {
         return $this->phrases;
     }
@@ -165,11 +208,14 @@ class PresearchBot extends Command
     /**
      * @param array $phrases
      */
-    public function setPhrases(array $phrases)
+    private function setPhrases(array $phrases)
     {
         $this->phrases = $phrases;
     }
 
+    /**
+     * @return string
+     */
     private function getRandomPhrase()
     {
         $random = array_rand($this->phrases);
