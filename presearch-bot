@@ -107,7 +107,7 @@ class PresearchBot extends Command
         $driverCapabilities = DesiredCapabilities::chrome();
         $driverCapabilities->setCapability(ChromeOptions::CAPABILITY, $driverOptions);
 
-        $this->driver = RemoteWebDriver::create('', $driverCapabilities);
+        $this->driver = RemoteWebDriver::create($input->getOption('webdriver-url'), $driverCapabilities);
         $this->credentials = [
             'email' => $input->getArgument('email'),
             'password' => $input->getArgument('password'),
