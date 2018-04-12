@@ -127,7 +127,7 @@ class PresearchBot extends Command
 
         $output->writeln(sprintf('Successfuly logged in, planning to do %s loops... Current balance is %s', $limit, $this->getBalance()));
 
-        sleep(2);
+	    $this->skipTour();
 
         while ($phrasesCount < $limit && count($this->phrases) > 0) {
             $this->driver->get('https://presearch.org');
@@ -156,9 +156,28 @@ class PresearchBot extends Command
             )
         );
 
-        $this->driver->findElement(WebDriverBy::id('email'))->sendKeys($this->credentials['email']);
-        $this->driver->findElement(WebDriverBy::id('password'))->sendKeys($this->credentials['password']);
+        $this->driver->findElement(WebDriverBy::cssSelector('.login-box input[name="email"]'))->sendKeys($this->credentials['email']);
+        $this->driver->findElement(WebDriverBy::cssSelector('.login-box input[name="password"]'))->sendKeys($this->credentials['password']);
         $this->driver->findElement(WebDriverBy::cssSelector('.login-box button[type="submit"]'))->click();
+    }
+
+    private function skipTour()
+    {
+        try {
+            $this->driver->wait(1)->until(
+	            WebDriverExpectedCondition::visibilityOf(
+		            $this->driver->findElement(WebDriverBy::cssSelector('.introjs-skipbutton'))
+	            )
+            );
+
+	        $this->driver->findElement(WebDriverBy::cssSelector('.introjs-skipbutton'))->click();
+
+            $this->driver->wait(2)->until(
+                WebDriverExpectedCondition::alertIsPresent()
+            );
+
+            $this->driver->switchTo()->alert()->accept();
+        } catch (\Exception $e) {}
     }
 
     /**
